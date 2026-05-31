@@ -8,38 +8,54 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 SEARCH_URL = "https://www.ebay.de/sch/i.html?_nkw=raspberry+pi+5+8gb&_sop=15"
+
 DISCOUNT_ALERT = 0.15
+DEBUG_TELEGRAM = True
 
 EXCLUDE_WORDS = [
     "case", "gehäuse", "cover", "kabel", "cable", "netzteil",
     "cooler", "lüfter", "fan", "sd", "microsd", "zubehör",
-    "defekt", "broken", "for parts", "empty box", "nur verpackung"
+    "defekt", "broken", "for parts", "empty box", "nur verpackung",
+    "box only", "heatsink", "adapter"
 ]
 
+
 def send_telegram(text):
+    if not TOKEN or not CHAT_ID:
+        print("Telegram token o chat id mancanti.")
+        return
+
     requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
         data={"chat_id": CHAT_ID, "text": text},
         timeout=20
     )
 
+
 def parse_price(text):
     match = re.search(r"EUR\s*([\d.,]+)", text)
+
     if not match:
         return None
+
     value = match.group(1).replace(".", "").replace(",", ".")
+
     try:
         return float(value)
     except ValueError:
         return None
 
+
 def main():
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
 
     response = requests.get(SEARCH_URL, headers=headers, timeout=20)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
+
     items = []
 
     for result in soup.select(".s-item"):
@@ -56,7 +72,13 @@ def main():
 
         title_lower = title.lower()
 
-        if "raspberry" not in title_lower or "5" not in title_lower or "8gb" not in title_lower:
+        if "raspberry" not in title_lower:
+            continue
+
+        if "5" not in title_lower:
+            continue
+
+        if "8gb" not in title_lower and "8 gb" not in title_lower:
             continue
 
         if any(word in title_lower for word in EXCLUDE_WORDS):
@@ -76,19 +98,43 @@ def main():
             "link": link
         })
 
+    print(f"Risultati validi trovati: {len(items)}")
+
+    for item in items[:5]:
+        print(f"- {item['title']} | {item['price']} €")
+
     if len(items) < 3:
-        send_telegram("⚠️ Tracker eBay: pochi risultati trovati per Raspberry Pi 5 8GB.")
+        message = f"⚠️ Tracker eBay: pochi risultati trovati: {len(items)}"
+        print(message)
+        send_telegram(message)
         return
 
     prices = [item["price"] for item in items]
+
     avg_price = statistics.mean(prices)
     alert_price = avg_price * (1 - DISCOUNT_ALERT)
 
-    deals = [item for item in items if item["price"] <= alert_price]
+    print(f"Prezzo medio: {avg_price:.2f} €")
+    print(f"Soglia alert: {alert_price:.2f} €")
 
-    print(f"Risultati validi: {len(items)}")
-    print(f"Prezzo medio: {avg_price:.2f}")
-    print(f"Soglia alert: {alert_price:.2f}")
+    if DEBUG_TELEGRAM:
+        debug_message = f"""🔎 Debug Raspberry Tracker
+
+Annunci validi trovati: {len(items)}
+Prezzo medio: {avg_price:.2f} €
+Soglia alert: {alert_price:.2f} €
+
+Primi risultati:
+"""
+        for item in items[:5]:
+            debug_message += f"\n- {item['price']:.2f} € | {item['title'][:60]}"
+
+        send_telegram(debug_message)
+
+    deals = [
+        item for item in items
+        if item["price"] <= alert_price
+    ]
 
     if deals:
         best = sorted(deals, key=lambda x: x["price"])[0]
@@ -108,6 +154,7 @@ Link:
         send_telegram(message)
     else:
         print("Nessun affare trovato.")
+
 
 if __name__ == "__main__":
     main()
